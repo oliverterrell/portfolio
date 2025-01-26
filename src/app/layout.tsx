@@ -1,17 +1,7 @@
-import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
+import { AppProvider } from '@/lib/AppProvider';
+import type { Metadata } from 'next';
 import { ReactNode } from 'react';
-
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
 
 export const metadata: Metadata = {
   title: 'Oliver Terrell Portfolio',
@@ -25,7 +15,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>{children}</body>
+      <body className={'font-abel'}>
+        <div
+          className={`inset-0 flex h-screen flex-col items-center bg-neutral-800 text-sm leading-relaxed text-white`}
+        >
+          <AppProvider>{children}</AppProvider>
+        </div>
+      </body>
     </html>
   );
 }

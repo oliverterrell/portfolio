@@ -3,6 +3,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Papa from 'papaparse';
 
+interface WhiteboardAnnotations {
+  [whiteboardId: string]: Rectangle[];
+}
+
 interface ImageData {
   id: string;
   image_url: string;
@@ -15,6 +19,7 @@ interface Rectangle {
   width: number;
   height: number;
   confidence: 'high' | 'medium' | 'low';
+  transcription: string;
 }
 
 interface Point {
@@ -32,17 +37,25 @@ export const ImageAnnotator: React.FC = () => {
   const [images, setImages] = useState<ImageData[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [rectangles, setRectangles] = useState<Rectangle[]>([]);
+  const [allAnnotations, setAllAnnotations] = useState<WhiteboardAnnotations>({});
   const [startPoint, setStartPoint] = useState<Point>({ x: 0, y: 0 });
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const currentRectangles = allAnnotations[images[currentImageIndex]?.id] || [];
+
+  const updateCurrentRectangles = (currentRectangles: Rectangle[]) => {
+    if (!images[currentImageIndex]) return;
+    setAllAnnotations((prev) => ({
+      ...prev,
+      [images[currentImageIndex].id]: currentRectangles,
+    }));
+  };
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Close context menu when clicking outside
     const handleClickOutside = (e: MouseEvent) => {
       if (!e.target || !(e.target as Element).closest('.context-menu')) {
         setContextMenu(null);
@@ -74,7 +87,7 @@ export const ImageAnnotator: React.FC = () => {
             }
             setImages(parsedImages);
             setCurrentImageIndex(0);
-            setRectangles([]);
+            updateCurrentRectangles([]);
           }
           setIsUploading(false);
         },
@@ -112,7 +125,10 @@ export const ImageAnnotator: React.FC = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(imageRef.current, 0, 0);
 
-      rectangles.forEach((rect) => {
+      const currentId = images[currentImageIndex]?.id;
+      const rectanglesToDraw = currentId ? allAnnotations[currentId] || [] : [];
+
+      rectanglesToDraw.forEach((rect) => {
         ctx.strokeStyle = getConfidenceColor(rect.confidence);
         ctx.lineWidth = 2;
         ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
@@ -191,7 +207,6 @@ export const ImageAnnotator: React.FC = () => {
 
     setIsDrawing(false);
 
-    // Only create rectangle if it has some size
     if (width > 5 && height > 5) {
       const newRect: Rectangle = {
         id: Math.random().toString(36).substr(2, 9),
@@ -199,11 +214,12 @@ export const ImageAnnotator: React.FC = () => {
         y: Math.min(startPoint.y, pos.y),
         width,
         height,
+        transcription: '',
         confidence: 'high',
       };
 
-      const updatedRectangles = [...rectangles, newRect];
-      setRectangles(updatedRectangles);
+      const updatedRectangles = [...currentRectangles, newRect];
+      updateCurrentRectangles(updatedRectangles);
 
       setContextMenu({
         x: e.pageX,
@@ -216,46 +232,74 @@ export const ImageAnnotator: React.FC = () => {
   };
 
   const handleConfidenceChange = (rectangleId: string, confidence: Rectangle['confidence']) => {
-    const updatedRectangles = rectangles.map((rect) =>
+    const updatedRectangles = currentRectangles.map((rect) =>
       rect.id === rectangleId ? { ...rect, confidence } : rect
     );
-    setRectangles(updatedRectangles);
+    updateCurrentRectangles(updatedRectangles);
 
     _updateCanvas(updatedRectangles);
   };
 
+  const handleTranscriptionChange = (rectangleId: string, transcription: string) => {
+    const updatedRectangles = currentRectangles.map((rect) =>
+      rect.id === rectangleId ? { ...rect, transcription } : rect
+    );
+    updateCurrentRectangles(updatedRectangles);
+  };
+
   const handleDeleteRectangle = (rectangleId: string) => {
-    const updatedRectangles = rectangles.filter((rect) => rect.id !== rectangleId);
-    setRectangles(updatedRectangles);
+    const updatedRectangles = currentRectangles.filter((rect) => rect.id !== rectangleId);
+    updateCurrentRectangles(updatedRectangles);
     setContextMenu(null);
 
     _updateCanvas(updatedRectangles);
+  };
+
+  const handleExportCSV = () => {
+    const exportRows = Object.entries(allAnnotations).flatMap(([whiteboardId, currentRectangles]) =>
+      currentRectangles.map((rect) => ({
+        whiteboard_id: whiteboardId,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        transcription: rect.transcription,
+        confidence_level: rect.confidence,
+      }))
+    );
+
+    const headers = ['whiteboard_id', 'x', 'y', 'width', 'height', 'transcription', 'confidence_level'];
+
+    const csvContent = [
+      headers.join(','),
+      ...exportRows.map((row) =>
+        headers
+          .map((header) => {
+            const value = row[header as keyof typeof row];
+            return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+          })
+          .join(',')
+      ),
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `whiteboard_annotations_${images[currentImageIndex].id}.csv`;
+    link.click();
   };
 
   const handleSave = async () => {
     if (!images[currentImageIndex]) return;
 
     try {
-      const annotationData = {
-        imageId: images[currentImageIndex].id,
-        annotations: rectangles.map(({ id, ...rect }) => rect),
-      };
-
-      const response = await fetch('/api/annotations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(annotationData),
-      });
-
-      if (response.ok) {
-        if (currentImageIndex < images.length - 1) {
-          setCurrentImageIndex(currentImageIndex + 1);
-          setRectangles([]);
-          setContextMenu(null);
-        }
-      }
+      const currentId = images[currentImageIndex].id;
+      setAllAnnotations((prev) => ({
+        ...prev,
+        [currentId]: currentRectangles,
+      }));
+      setCurrentImageIndex(currentImageIndex + 1);
+      setContextMenu(null);
     } catch (error) {
       console.error('Error saving annotations:', error);
     }
@@ -285,9 +329,20 @@ export const ImageAnnotator: React.FC = () => {
     );
   }
 
+  const _countTotalRectangles = () => {
+    return Object.values(allAnnotations).reduce((sum, rects) => sum + rects.length, 0);
+  };
+
   return (
     <div className="mx-auto max-w-4xl p-4">
-      <div className="mb-4 flex items-center justify-between">todo todo todo</div>
+      <div className="mb-4 flex items-center justify-between">
+        <button
+          onClick={handleExportCSV}
+          className="rounded bg-green-500 px-4 py-2 text-white hover:bg-green-600"
+        >
+          Export CSV ({_countTotalRectangles()} transcriptions)
+        </button>
+      </div>
 
       <div className="relative overflow-hidden rounded border">
         <canvas
@@ -310,8 +365,15 @@ export const ImageAnnotator: React.FC = () => {
             }}
           >
             <div className="flex flex-col gap-2">
+              <textarea
+                value={currentRectangles.find((r) => r.id === contextMenu.rectangleId)?.transcription || ''}
+                onChange={(e) => handleTranscriptionChange(contextMenu.rectangleId, e.target.value)}
+                placeholder="Enter transcription..."
+                className="mt-2 w-full rounded border p-1 text-black caret-black"
+                rows={3}
+              />
               <select
-                value={rectangles.find((r) => r.id === contextMenu.rectangleId)?.confidence ?? 'high'}
+                value={currentRectangles.find((r) => r.id === contextMenu.rectangleId)?.confidence ?? 'high'}
                 onChange={(e) =>
                   handleConfidenceChange(contextMenu.rectangleId, e.target.value as Rectangle['confidence'])
                 }

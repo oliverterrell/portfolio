@@ -17,7 +17,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={'font-abel'}>
         <div
-          className={`inset-0 flex h-screen flex-col items-center bg-neutral-800 text-sm leading-relaxed text-white`}
+          className={`inset-0 flex h-full min-h-screen flex-col items-center bg-neutral-800 text-sm leading-relaxed text-white`}
         >
           <AppProvider>{children}</AppProvider>
         </div>

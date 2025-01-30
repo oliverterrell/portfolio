@@ -18,8 +18,14 @@ interface Rectangle {
   y: number;
   width: number;
   height: number;
+  rotation?: number; // Add this line
   confidence: 'high' | 'medium' | 'low';
   transcription: string;
+}
+
+interface ResizeHandle {
+  corner: 'nw' | 'ne' | 'se' | 'sw';
+  rect: Rectangle;
 }
 
 interface Point {
@@ -41,6 +47,10 @@ export const ImageAnnotator: React.FC = () => {
   const [startPoint, setStartPoint] = useState<Point>({ x: 0, y: 0 });
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [selectedRect, setSelectedRect] = useState<Rectangle | null>(null);
+  const [isResizing, setIsResizing] = useState<ResizeHandle | null>(null);
+  const [isRotating, setIsRotating] = useState(false);
+
   const currentRectangles = allAnnotations[images[currentImageIndex]?.id] || [];
 
   const updateCurrentRectangles = (currentRectangles: Rectangle[]) => {
@@ -117,21 +127,52 @@ export const ImageAnnotator: React.FC = () => {
   const drawCanvas = () => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
-
     if (canvas && ctx && imageRef.current) {
       canvas.width = imageRef.current.width;
       canvas.height = imageRef.current.height;
-
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(imageRef.current, 0, 0);
-
       const currentId = images[currentImageIndex]?.id;
       const rectanglesToDraw = currentId ? allAnnotations[currentId] || [] : [];
 
       rectanglesToDraw.forEach((rect) => {
+        ctx.save();
+
+        // Draw rectangle
         ctx.strokeStyle = getConfidenceColor(rect.confidence);
         ctx.lineWidth = 2;
         ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+
+        // Draw transcription text
+        if (rect.transcription) {
+          ctx.font = '14px Arial';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.textBaseline = 'top';
+          const padding = 4;
+          const textWidth = ctx.measureText(rect.transcription).width + padding * 2;
+          ctx.fillRect(rect.x, rect.y - 24, textWidth, 24);
+          ctx.fillStyle = 'black';
+          ctx.fillText(rect.transcription, rect.x + padding, rect.y - 20);
+        }
+
+        if (selectedRect?.id === rect.id) {
+          const handleSize = 8;
+          const handles = [
+            { x: rect.x, y: rect.y }, // nw
+            { x: rect.x + rect.width, y: rect.y }, // ne
+            { x: rect.x + rect.width, y: rect.y + rect.height }, // se
+            { x: rect.x, y: rect.y + rect.height }, // sw
+          ];
+
+          handles.forEach((handle) => {
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+            ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+          });
+        }
+
+        ctx.restore();
       });
     }
   };
@@ -149,16 +190,50 @@ export const ImageAnnotator: React.FC = () => {
     }
   };
 
-  const _updateCanvas = (updatedRectangles) => {
+  const _updateCanvas = (updatedRectangles: Rectangle[]) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (canvas && ctx && imageRef.current) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(imageRef.current, 0, 0);
+
       updatedRectangles.forEach((rect) => {
+        ctx.save();
+
         ctx.strokeStyle = getConfidenceColor(rect.confidence);
         ctx.lineWidth = 2;
         ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+
+        if (rect.transcription) {
+          ctx.font = '14px Arial';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.textBaseline = 'top';
+          const padding = 4;
+          const textWidth = ctx.measureText(rect.transcription).width + padding * 2;
+          ctx.fillRect(rect.x, rect.y - 24, textWidth, 24);
+          ctx.fillStyle = 'white';
+          ctx.fillText(rect.transcription, rect.x + padding, rect.y - 20);
+        }
+
+        if (selectedRect?.id === rect.id) {
+          const handleSize = 10;
+          const handles = [
+            { x: rect.x, y: rect.y }, // nw
+            { x: rect.x + rect.width, y: rect.y }, // ne
+            { x: rect.x + rect.width, y: rect.y + rect.height }, // se
+            { x: rect.x, y: rect.y + rect.height }, // sw
+          ];
+
+          handles.forEach((handle) => {
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+            ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+          });
+        }
+
+        ctx.restore();
       });
     }
   };
@@ -174,31 +249,131 @@ export const ImageAnnotator: React.FC = () => {
     };
   };
 
+  const getHandleAtPoint = (x: number, y: number, rect: Rectangle): ResizeHandle | null => {
+    const handleSize = 8;
+    const handles = [
+      { corner: 'nw', x: rect.x, y: rect.y },
+      { corner: 'ne', x: rect.x + rect.width, y: rect.y },
+      { corner: 'se', x: rect.x + rect.width, y: rect.y + rect.height },
+      { corner: 'sw', x: rect.x, y: rect.y + rect.height },
+    ];
+
+    for (const handle of handles) {
+      if (
+        x >= handle.x - handleSize / 2 &&
+        x <= handle.x + handleSize / 2 &&
+        y >= handle.y - handleSize / 2 &&
+        y <= handle.y + handleSize / 2
+      ) {
+        return { corner: handle.corner as 'nw' | 'ne' | 'se' | 'sw', rect };
+      }
+    }
+    return null;
+  };
+
+  const isPointInRotateHandle = (x: number, y: number, rect: Rectangle): boolean => {
+    const handleX = rect.x + rect.width / 2;
+    const handleY = rect.y - 20;
+    const distance = Math.sqrt(Math.pow(x - handleX, 2) + Math.pow(y - handleY, 2));
+    return distance <= 5;
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    setContextMenu(null);
     const pos = getMousePos(canvas, e);
+
+    const currentId = images[currentImageIndex]?.id;
+    const rectangles = currentId ? allAnnotations[currentId] || [] : [];
+
+    for (const rect of rectangles) {
+      if (selectedRect?.id === rect.id) {
+        const handle = getHandleAtPoint(pos.x, pos.y, rect);
+        if (handle) {
+          setIsResizing(handle);
+          return;
+        }
+      }
+
+      if (pos.x >= rect.x && pos.x <= rect.x + rect.width && pos.y >= rect.y && pos.y <= rect.y + rect.height) {
+        setSelectedRect(rect);
+        setContextMenu({
+          x: e.pageX,
+          y: e.pageY,
+          rectangleId: rect.id,
+        });
+        return;
+      }
+    }
+
     setIsDrawing(true);
     setStartPoint(pos);
+    setSelectedRect(null);
+    setContextMenu(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    const pos = getMousePos(canvasRef.current, e);
-    drawCanvas();
+    const pos = getMousePos(canvas, e);
 
-    const ctx = canvasRef.current.getContext('2d');
-    if (ctx) {
-      ctx.strokeStyle = getConfidenceColor('high');
-      ctx.lineWidth = 2;
-      ctx.strokeRect(startPoint.x, startPoint.y, pos.x - startPoint.x, pos.y - startPoint.y);
+    if (isResizing && selectedRect) {
+      e.preventDefault();
+
+      const { corner, rect } = isResizing;
+      const updatedRect = { ...rect };
+
+      switch (corner) {
+        case 'nw':
+          updatedRect.width = rect.x + rect.width - pos.x;
+          updatedRect.height = rect.y + rect.height - pos.y;
+          updatedRect.x = pos.x;
+          updatedRect.y = pos.y;
+          break;
+        case 'ne':
+          updatedRect.width = pos.x - rect.x;
+          updatedRect.height = rect.y + rect.height - pos.y;
+          updatedRect.y = pos.y;
+          break;
+        case 'se':
+          updatedRect.width = pos.x - rect.x;
+          updatedRect.height = pos.y - rect.y;
+          break;
+        case 'sw':
+          updatedRect.width = rect.x + rect.width - pos.x;
+          updatedRect.height = pos.y - rect.y;
+          updatedRect.x = pos.x;
+          break;
+      }
+
+      if (updatedRect.width > 5 && updatedRect.height > 5) {
+        const updatedRectangles = currentRectangles.map((r) => (r.id === selectedRect.id ? updatedRect : r));
+        updateCurrentRectangles(updatedRectangles);
+        setSelectedRect(updatedRect);
+        _updateCanvas(updatedRectangles);
+      }
+      return;
+    }
+
+    if (isDrawing) {
+      drawCanvas();
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.strokeStyle = getConfidenceColor('high');
+        ctx.lineWidth = 2;
+        ctx.strokeRect(startPoint.x, startPoint.y, pos.x - startPoint.x, pos.y - startPoint.y);
+      }
     }
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isResizing) {
+      setIsResizing(null);
+      return;
+    }
+
     if (!isDrawing || !canvasRef.current) return;
 
     const pos = getMousePos(canvasRef.current, e);
@@ -220,6 +395,7 @@ export const ImageAnnotator: React.FC = () => {
 
       const updatedRectangles = [...currentRectangles, newRect];
       updateCurrentRectangles(updatedRectangles);
+      setSelectedRect(newRect);
 
       setContextMenu({
         x: e.pageX,
@@ -245,6 +421,7 @@ export const ImageAnnotator: React.FC = () => {
       rect.id === rectangleId ? { ...rect, transcription } : rect
     );
     updateCurrentRectangles(updatedRectangles);
+    _updateCanvas(updatedRectangles);
   };
 
   const handleDeleteRectangle = (rectangleId: string) => {
